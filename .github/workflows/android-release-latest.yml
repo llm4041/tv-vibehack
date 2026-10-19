@@ -1,9 +1,14 @@
-name: Build and publish launcher to "latest" release
+name: Build and publish launcher (timestamped release)
 
+# Trigger only on main branch changes — the release workflow performs build+publish
 on:
   push:
     branches:
       - main
+
+# Need write permissions to create releases/assets
+permissions:
+  contents: write
 
 jobs:
   build-and-publish:
@@ -13,6 +18,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set TIMESTAMP and TAG
+        run: |
+          TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+          echo "TAG=v$TIMESTAMP" >> $GITHUB_ENV
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -45,12 +56,20 @@ jobs:
         working-directory: launcher
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Upload to latest release
+      - name: Prepare release assets (rename with tag)
+        run: |
+          mkdir -p release-artifacts
+          find launcher -type f -name '*.apk' -print0 | while IFS= read -r -d '' apk; do
+            base=$(basename "$apk")
+            cp "$apk" "release-artifacts/${base%.*}-${{ env.TAG }}.apk"
+          done
+
+      - name: Create release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: latest
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
           files: |
-            launcher/**/build/outputs/**/*.apk
+            release-artifacts/*.apk
           draft: false
           prerelease: false
