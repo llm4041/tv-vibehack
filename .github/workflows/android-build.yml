@@ -1,14 +1,10 @@
 # Android - Build launcher
-# Builds the APK(s) under launcher/ and uploads them as artifacts.
+# Previously this workflow ran on push/pull_request for launcher/**.
+# Changed to manual trigger only to avoid duplicate builds — builds for main are
+# performed by the release workflow.
 name: Android - Build launcher
 
 on:
-  push:
-    paths:
-      - 'launcher/**'
-  pull_request:
-    paths:
-      - 'launcher/**'
   workflow_dispatch:
 
 jobs:
