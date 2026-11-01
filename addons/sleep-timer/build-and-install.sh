@@ -7,7 +7,7 @@
 # Try it without waiting (adb only): a 70 s timer, the warning after 10 s:
 #        TV_HOST=192.168.1.50 tools/tv.py 'am broadcast -n io.github.luyzfernando08.sleeptimer/.AlarmReceiver -a io.github.luyzfernando08.sleeptimer.TEST --ei seconds 70'
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")" && (pwd -W 2>/dev/null || pwd))"
 TOOLS="$HERE/../../tools"
 : "${TV_HOST:?set TV_HOST to the TV IP address, e.g. TV_HOST=192.168.1.50 $0}"
 PY="$TOOLS/venv/bin/python"
@@ -32,4 +32,7 @@ tv "s=\$(settings get secure enabled_accessibility_services); case :\$s: in *:$S
 # Android 10 and later only let an app open its warning from the background when it may draw over other apps;
 # Android 12 and later need the exact-alarm grant for the timer to fire on the minute.
 tv "appops set $PKG SYSTEM_ALERT_WINDOW allow; appops set $PKG SCHEDULE_EXACT_ALARM allow 2>/dev/null; true"
+# TCL's TclAppBoot refuses to bind SleepService while the app is not running unless it may auto-start (AUTO_START
+# on G08 builds, APP_AUTO_START on G10); elsewhere the op doesn't exist. write-settings saves it before the next reboot.
+tv "appops set $PKG AUTO_START allow 2>/dev/null; appops set $PKG APP_AUTO_START allow 2>/dev/null; appops write-settings 2>/dev/null; true" >/dev/null
 echo "Installed. Pick a time on the Sleep Timer card."

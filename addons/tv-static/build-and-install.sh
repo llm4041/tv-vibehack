@@ -6,7 +6,7 @@
 #        TV_HOST=192.168.1.50 addons/tv-static/build-and-install.sh --no-play     # install without playing it now
 #        TV_HOST=192.168.1.50 addons/tv-static/build-and-install.sh --uninstall
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")" && (pwd -W 2>/dev/null || pwd))"
 TOOLS="$HERE/../../tools"
 : "${TV_HOST:?set TV_HOST to the TV IP address, e.g. TV_HOST=192.168.1.50 $0}"
 PY="$TOOLS/venv/bin/python"
@@ -28,8 +28,9 @@ PLAY=true
 tv "pm install -r /data/local/tmp/tvstatic.apk; rm -f /data/local/tmp/tvstatic.apk"
 # Android 10 and later let an app open a screen from the background only when it may draw over other apps.
 tv "appops set $PKG SYSTEM_ALERT_WINDOW allow"
-# TCL's TclAppBoot keeps apps from starting at boot unless they may auto-start; elsewhere the op doesn't exist.
-tv "appops set $PKG APP_AUTO_START allow 2>/dev/null; true" >/dev/null
+# TCL's TclAppBoot keeps apps from starting at boot unless they may auto-start (AUTO_START on G08 builds,
+# APP_AUTO_START on G10); elsewhere the op doesn't exist. write-settings saves it before the next reboot.
+tv "appops set $PKG AUTO_START allow 2>/dev/null; appops set $PKG APP_AUTO_START allow 2>/dev/null; appops write-settings 2>/dev/null; true" >/dev/null
 # Starting the watcher once takes the app out of the stopped state, without which Android withholds BOOT_COMPLETED.
 tv "am start-foreground-service -n $PKG/.WatchService --ez play $PLAY"
 echo "Installed. The static plays whenever the screen turns on; its settings are on the TV Static card."
