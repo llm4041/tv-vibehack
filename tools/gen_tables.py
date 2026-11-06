@@ -26,14 +26,17 @@ folders in the same order, alphabetical by "tv" (case ignored), so a brand's mod
 The full table lives in examples/README.md between <!-- tv-table:start ... --> and <!-- tv-table:end -->.
 README.md has no table of its own: its brand grid (the TOP brands with the most lists, linked to the site's
 search, and the rest in a <details>) sits between <!-- tv-brands:start ... --> and <!-- tv-brands:end -->.
-README.nl.md and README.de.md carry the same brand block and the same counts in their own words ("N
-tv-modellen · B merken · L talen · " and "N TV-Modelle · B Marken · L Sprachen · "), and a README that still
-has tv-table markers gets the short table there too. Everything outside the markers is hand-written.
+README.nl.md, README.de.md, README.uk.md and README.tr.md carry the same brand block and the same counts in
+their own words ("N tv-modellen · B merken · L talen · ", "N TV-Modelle · B Marken · L Sprachen · ",
+and the Ukrainian and Turkish words in TRANSLATIONS below), and a README that still has tv-table markers
+gets the short table there too. Everything outside the markers is hand-written.
 The counts are the card's alt text ("N TV models · B brands · L languages · "), the "| **L languages** |"
 feature row and STATS in tools/readme_stats.py. Exit codes: 0 up to date (or written), 1 out of date
 (--check), or a count moved and --font could not draw one of the pictures (the tables are written; the
 picture is not - redraw it before committing), 2 what it was given cannot be read: a tv.json, a marker, or
-the path in --root or --adopt (nothing is written then).
+the path in --root or --adopt (nothing is written then), or an --adopt row main has changed since the PR
+was written: the tv.json files the patch did apply are on disk and the message names them, the tables are
+not regenerated, so that row is moved into its tv.json by hand and the script run again.
 """
 import argparse
 import json
@@ -269,7 +272,8 @@ OWNED = ("README.md", "examples/README.md", "tools/readme_stats.py")
 TRANSLATIONS = {"README.nl.md": ("tv-modellen", "merken", "talen"),
                 "README.de.md": ("TV-Modelle", "Marken", "Sprachen"),
                 "README.uk.md": (("модель телевізорів", "моделі телевізорів", "моделей телевізорів"),
-                                 ("бренд", "бренди", "брендів"), ("мова", "мови", "мов"))}
+                                 ("бренд", "бренди", "брендів"), ("мова", "мови", "мов")),
+                "README.tr.md": ("TV modeli", "marka", "dil")}
 
 
 def readme(text, entries, root, path, words=WORDS):
@@ -329,11 +333,17 @@ def adopt(root, patch_text):
     and notes, a README row with the same TV gives readme_os when its OS differs. A folder with no tv.json
     gets one. A folder that has one (a PR that edited its row) takes the new tv, os and notes only if the
     row the PR removed is what its tv.json still says; if main has changed the row since, nothing is
-    written for it and Problem is raised once the rest are done. Returns [(folder, what happened)].
+    written for that folder and Problem is raised once the rest are done. Returns [(folder, what happened)].
 
     The tv.json files already in the checkout are read through load(), so one this script cannot use is
-    named in the words --check names it and Problem is raised before the first write: a patch is applied
-    whole or not at all, which is what the module's exit-2 line says."""
+    named in the words --check names it and Problem is raised before the first write. A row main has moved
+    on is the other way it stops, and it stops late: what it could apply is written first, and the message
+    lists those files as written rather than as part of the complaint (the module's exit-2 line says what
+    that leaves in the checkout: the tables are not regenerated, so the row is fixed by hand and the
+    script run again). Calling the patch all-or-nothing, as this docstring once did, was the reader being
+    told a failed run left nothing behind - tests/test_gen_tables.py's
+    test_a_row_main_has_changed_since_is_not_overwritten pins what it really leaves.
+    """
     lines = patch_text.split("\n")
     added = [l[1:] if l.startswith("+") else l for l in lines if not l.startswith(("-", " "))]
     removed = [l[1:] for l in lines if l.startswith("-")]
@@ -370,7 +380,17 @@ def adopt(root, patch_text):
         write_json(folder / "tv.json", data)
         out.append((name, f"new, brand {brand}" + ("" if brand in known else " (a new brand: check the spelling)")))
     if stale_rows:
-        raise Problem("\n".join([f"examples/{n}/tv.json: {what}" for n, what in out] + stale_rows))
+        # The files this run did write are said as written, above the rows it did not apply: a maintainer
+        # who reads the whole block as "nothing happened" leaves those tv.json files uncommitted, or
+        # commits them beside tables that were never regenerated - and the next --check run is the one
+        # that says so.
+        written = [f"examples/{n}/tv.json: {what}" for n, what in out]
+        head = (["These tv.json files are written and stay written:"] + written) if written \
+            else ["No tv.json was written."]
+        raise Problem("\n".join(head + ["These rows were not applied:"] + stale_rows + [
+            "The tables were not regenerated, so README.md and examples/README.md still hold the rows they "
+            "had" + (" and this checkout now answers --check with 1" if written else "") + ". Move that row's change into its tv.json by "
+            "hand, then run python3 tools/gen_tables.py again."]))
     return out
 
 

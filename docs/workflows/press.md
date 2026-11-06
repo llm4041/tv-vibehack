@@ -8,16 +8,20 @@
 2. Update the counts in every place `tests/test_press_counts.py` checks: the `docs/PRESS.md` intro line, its
    index line, the card's alt text in every `README*.md` that shows `docs/card.jpg` - today `README.md` ("and N
    more: N articles from N countries"), the Dutch `README.nl.md` ("nog N media: N artikelen uit N landen") and
-   the German `README.de.md` ("und N weitere: N Artikel aus N Ländern") and the Ukrainian
-   `README.uk.md` ("та ще N видань: N статей із N країн") - and `MORE` in
+   the German `README.de.md` ("und N weitere: N Artikel aus N Ländern"), the Ukrainian
+   `README.uk.md` ("та ще N видань: N статей із N країн") and the Turkish `README.tr.md`
+   ("ve N yayın daha: N ülkeden N makale", the country count before the article total) - and `MORE` in
    `tools/readme_featured.py`. Every page shows the same picture, so a translation that copies it states the
-   same numbers in its own words: the three named here are the pages that carry it today, not the rule.
+   same numbers in its own words: the pages named here are the ones that carry it today, not the rule.
    The end of each page's story section repeats the three numbers once more, in prose ("The coverage: 351
    articles from 46 countries and 229 videos on YouTube and Bilibili, all in `docs/PRESS.md`"), and the same
    test reads that sentence too: the page states the count twice, once in the card's alt text and once in
    that sentence, so a reader who sees 352 in the picture and 351 in the story section is looking at a page
    that was half updated. Leave the counts out of the sentence and the test says the paragraph no longer
-   carries them.
+   carries them. That paragraph is also read on the one front page that has it without the card:
+   `README.pt-BR.md` shows no `docs/card.jpg`, so its numbers are held to `README.md`'s alt text and to
+   `docs/PRESS.md` on their own, and its coverage clause has to open with a colon like the others
+   ("A repercussão: 412 artigos ..."), since that colon is what the reader cuts the three numbers at.
    Redrawing `docs/featured.png` and `docs/card.jpg` needs Pillow, which the performance requirements install:
    `tools/venv/bin/pip install -r tools/requirements-perf.txt`, then
    `tools/venv/bin/python -I tools/readme_featured.py Fredoka.ttf docs/featured.png` and

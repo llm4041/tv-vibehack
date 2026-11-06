@@ -175,6 +175,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private int glassAccent;
     private int ambientColor = -1;
     private ValueAnimator ambientAnimator;
+    /** config.xml glow_snap: the glow takes a new colour in one frame instead of the dip-and-fade. */
+    private boolean glowSnap;
     private boolean heroShown;
     private boolean animations;
     private boolean advancedEffects;
@@ -208,6 +210,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean showStats;
     /** config.xml inputs_connected_only: the Inputs menu lists only connected inputs, the rest behind "More inputs". */
     private boolean inputsConnectedOnly;
+    /** config.xml inputs_cec_state_only: only CEC device rows show a connection state, bare HDMI ports none. */
+    private boolean inputsCecStateOnly;
     private boolean shamsi;
     /** greeting_name: said after the greeting, which is shown in capitals. */
     private String greetingName = "";
@@ -231,6 +235,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** The same for springX, when single_row scrolls the grid sideways. */
     private float glassScrollShiftX;
     private int glassCardW;   // width of the tile the glass was last fitted to
+    /**
+     * The focused tile's rect in root coordinates as {@link #onTileFocused} last fitted the glass to it. The size
+     * alone cannot say whether the glass is on its tile: a cold start can run onTileFocused once the tile has its
+     * final width but before the grid has its top padding, which leaves the right size at the old Y.
+     */
+    private final Rect glassCardRect = new Rect();
     private boolean glassShown;
     private final Rect tileRect = new Rect();
     private final Rect revealRect = new Rect();
@@ -269,6 +279,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean openOnStartChoice;
     /** open_on_start_network_wait, in ms; the boot's app while it waits for the network, and until when. */
     private long openOnStartWaitMs;
+    /** open_on_start_on_wake: wakeReceiver is registered for this activity's life. */
+    private boolean openOnStartOnWake;
     private volatile Intent startPending;
     private long startDeadline;
     /** Opens the boot's app once the network is validated (networkCallback posts this) or the wait is over. */
@@ -282,6 +294,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             Intent i = startPending;
             startPending = null;
             open(i);
+        }
+    };
+    private final BroadcastReceiver wakeReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            openStartAppOnWake();
         }
     };
     /** hidden_apps as the adapter sees them (config.xml or a theme's config.json): a hidden app gets no card either. */
@@ -409,8 +427,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         @Override
         public void onReceive(Context context, Intent intent) {
             updateClockVisibility();
+            clockRefresh.start();   // the wall clock was set: line the redraw up with the new minute
         }
     };
+    /** Keeps the Home clocks moving on Android before 12 when the firmware stops ACTION_TIME_TICK (see ClockRefresh). */
+    private ClockRefresh clockRefresh;
     private final Runnable minuteTick = new Runnable() {
         @Override
         public void run() {
@@ -465,6 +486,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         bootToLiveTv = cfg.bootToLiveTv;
         openOnStartChoice = cfg.openOnStartChoice;
         openOnStartWaitMs = cfg.openOnStartNetworkWait * 1000L;
+        openOnStartOnWake = OpenOnStart.onWake(cfg.openOnStartChoice, cfg.openOnStartOnWake);
         liveTvAction = cfg.liveTvAction;
         liveTvInputId = cfg.liveTvInputId;
         appLibraryEnabled = cfg.appLibrary;
@@ -494,6 +516,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // a fade renders it into a full-screen offscreen buffer first.
         ambient.forceHasOverlappingRendering(false);
         ambientGlow = cfg.ambientGlow;
+        glowSnap = cfg.glowSnap;
         appGlow = cfg.appGlow;
         if (!ambientGlow) ambient.setVisibility(View.GONE);
         heroName = findViewById(R.id.heroName);
@@ -515,6 +538,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (!cfg.dockTitle) hero.setVisibility(View.GONE);
         greeting = findViewById(R.id.greeting);
         clockBlock = findViewById(R.id.leftBlock);
+        clockRefresh = new ClockRefresh(clockBlock);
         greetingColor = greeting.getCurrentTextColor();
         if (!cfg.showGreeting) greeting.setVisibility(View.GONE);
         // Keep the other header layouts as designed: their extra lines change the block's centre.
@@ -558,6 +582,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rotationStart = SystemClock.elapsedRealtime();
         showStats = cfg.showStats;
         inputsConnectedOnly = cfg.inputsConnectedOnly;
+        inputsCecStateOnly = cfg.inputsCecStateOnly;
         shamsi = cfg.shamsiDate;
         lunarDate = findViewById(R.id.lunarDate);
         lunar = cfg.lunarDate;
@@ -918,6 +943,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         } else {
             registerReceiver(packageReceiver, packageFilter);
         }
+        if (openOnStartOnWake) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(wakeReceiver, new IntentFilter(Intent.ACTION_SCREEN_ON), Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(wakeReceiver, new IntentFilter(Intent.ACTION_SCREEN_ON));
+            }
+        }
 
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
@@ -1043,6 +1075,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             registerReceiver(timeReceiver, timeFilter);
         }
         updateClockVisibility();
+        clockRefresh.start();   // with timeReceiver: while Home is visible, paused or not
         tileRefresh.onStart();
     }
 
@@ -1081,6 +1114,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (openLiveTvAfterBoot()) return;
         updateGreeting();
         updatePanel();
+        // Back from an app opened from its tile, focus is still on that tile, so the cinematic "Last opened" line kept
+        // the time from before this launch ("2 days ago" right after opening it). Refresh it.
+        if (cinematic && heroMeta != null && lastFocused >= 0 && lastFocused < adapter.appCount()) updateHeroMeta(lastFocused);
         // The network and Inputs pills keep their state while Home is in the background, and callbacks update them
         // when the network or the inputs change, so this refresh only catches anything missed. Its binder calls
         // (about 7 ms on a TCL C755, most of it WifiManager.getConnectionInfo) would hold up the first frame back
@@ -1293,6 +1329,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onStop();
         started = false;
         unregisterReceiver(timeReceiver);
+        clockRefresh.stop();
         handler.removeCallbacks(clockCheck);
         stopped = true;
         tileRefresh.onStop();
@@ -1339,6 +1376,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         cancelHoldOk();
         if (gameDay != null) gameDay.shutdown();
         unregisterReceiver(packageReceiver);
+        if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
         wallpaperPlayer.close();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
@@ -1573,9 +1611,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 adapter.move(pos, slot);
                 adapter.move(adapter.positionOf(slotKey), pos);
             });
-            dockInSession.add(adapter.keyAt(slot));
             if (pos >= COLUMNS) dockInSession.remove(slotKey);
         }
+        // Outside the check: with no empty slots shown, the chosen app may already sit in the free place.
+        dockInSession.add(adapter.keyAt(slot));
         endReorder();
         refocusAfterLayout(slot);
     }
@@ -1786,6 +1825,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             glass.setRadius(AppAdapter.cornerRadius(card.getWidth(), density) * scale);
         }
         glassCardW = card.getWidth();
+        glassCardRect.set(r);
         glassTargetX = x;
         glassTargetY = y;
         // Cinematic shelf: the highlight glows in the dock app's colour, plain white in the grid (and on the dock with
@@ -1848,7 +1888,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         float scale = adapter.focusScale();
         int w = (int) (card.getWidth() * scale + 2 * pad);
         int h = (int) (card.getHeight() * scale + 2 * pad);
-        if (!glassShown || card.getWidth() != glassCardW || glass.getWidth() != w || glass.getHeight() != h) {
+        // The tile's rect, not only its width: the grid's top padding lands after the tile has its width, so a
+        // cold start can leave the glass at the right size and the wrong place. Comparing the rect catches that.
+        Rect r = tileRect;
+        r.set(0, 0, card.getWidth(), card.getHeight());
+        root.offsetDescendantRectToMyCoords(card, r);
+        if (!glassShown || card.getWidth() != glassCardW || glass.getWidth() != w || glass.getHeight() != h
+                || !glassCardRect.equals(r)) {
             onTileFocused(pos, card);
         }
     }
@@ -1902,6 +1948,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }).start();
             if (ambientGlow && advancedEffects) {
                 transitionAmbient(color);
+            } else if (ambientGlow && color != ambientColor && glowSnap) {
+                ambient.animate().cancel();
+                setAmbient(color);
+                ambient.setAlpha(1f);
             } else if (ambientGlow && color != ambientColor) {
                 ambient.animate().alpha(0.35f).setDuration(200).withEndAction(() -> {
                     setAmbient(color);
@@ -2150,6 +2200,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             ambient.animate().alpha(1f).setDuration(300).start();
             return;
         }
+        if (glowSnap) {
+            setAmbient(color);
+            ambient.setAlpha(1f);
+            return;
+        }
         // The same dip-and-swap as the dock's top shelf.
         ambient.animate().alpha(0.35f).setDuration(ambient.getAlpha() > 0.35f ? 200 : 0).withEndAction(() -> {
             setAmbient(color);
@@ -2335,26 +2390,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return Math.max(0, Math.min(100, busy));
     }
 
-    /** RAM usage as {used, total} in MB, used = MemTotal - MemAvailable, e.g. "945 / 1536 MB". Used over
-     *  free so the line reads as a load against a known whole; null when /proc/meminfo cannot be read. */
+    /** RAM usage as {used, total} in MB (MemInfo.usedOfTotalMb); null when /proc/meminfo cannot be read. */
     private long[] memUsedOfTotalMb() {
-        long available = -1, total = -1;
+        java.util.List<String> lines = new java.util.ArrayList<>();
         try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader("/proc/meminfo"))) {
-            String line;
-            String[] t;
-            while ((line = r.readLine()) != null) {
-                if (line.startsWith("MemAvailable:")) {
-                    t = line.split("\\s+");
-                    if (t.length >= 2) available = Long.parseLong(t[1]) / 1024;
-                } else if (line.startsWith("MemTotal:")) {
-                    t = line.split("\\s+");
-                    if (t.length >= 2) total = Long.parseLong(t[1]) / 1024;
-                }
-            }
-        } catch (IOException | NumberFormatException ignored) {
+            for (String line; (line = r.readLine()) != null;) lines.add(line);
+        } catch (IOException ignored) {
+            return null;
         }
-        if (available < 0 || total <= 0) return null;
-        return new long[]{Math.max(0, total - available), total};
+        return MemInfo.usedOfTotalMb(lines);
     }
 
     private static String readFirstLine(String path) {
@@ -2502,8 +2546,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** The first top-bar button after Inputs that is shown, in bar order (top_bar_apps, the network pill, ...); Settings is always there. */
     private View firstTopButton() {
         ViewGroup bar = findViewById(R.id.topButtons);
-        for (int i = 0; i < bar.getChildCount(); i++) {
-            View button = bar.getChildAt(i);
+        // The Hebrew layout (layout-iw) lists the bar mirrored, Settings first and Inputs last, so bar order
+        // runs from the end there. Walking it forwards returned Settings, and the pill key guard then treated
+        // Settings as both ends of the bar: Right from Settings was swallowed and never reached Wi-Fi.
+        boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
+        int n = bar.getChildCount();
+        for (int k = 0; k < n; k++) {
+            View button = bar.getChildAt(rtl ? n - 1 - k : k);
             if (button != btnInputs && button.getVisibility() == View.VISIBLE) return button;
         }
         return findViewById(R.id.btnSettings);
@@ -3181,6 +3230,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (!prefs.edit().putInt(OpenOnStart.BOOT_KEY, boot).commit()) return false;
         Intent i = bootToLiveTv ? liveTvIntent() : OpenOnStart.intent(getPackageManager(), app);
         if (i == null) return false;
+        return openWhenReady(i);
+    }
+
+    /** open_on_start_on_wake: the remote's power button is a light sleep on some sets, with no boot for
+     *  openLiveTvAfterBoot to catch. */
+    private void openStartAppOnWake() {
+        String app = getSharedPreferences(Config.SETTINGS_NAME, MODE_PRIVATE).getString(OpenOnStart.KEY, "");
+        if (app.isEmpty() || app.equals(getPackageName())) return;
+        Intent i = OpenOnStart.intent(getPackageManager(), app);
+        if (i != null) openWhenReady(i);
+    }
+
+    private boolean openWhenReady(Intent i) {
         // open_on_start_network_wait: Home stays on screen until the network is back or the wait is over.
         if (openOnStartWaitMs > 0 && !OpenOnStart.online(this)) {
             startPending = i;
@@ -3383,7 +3445,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 hdmiPorts++;
                 if (tim.getInputState(info.getId()) == TvInputManager.INPUT_STATE_CONNECTED) hdmiConnected++;
             }
-            boolean hdmiStateBogus = hdmiPorts > 1 && hdmiConnected == hdmiPorts;
+            // inputs_cec_state_only: the TV puts port states on the wrong port (TCL UnionTV, Android 9), so
+            // ports show none, and a CEC device row shows its own state, which the CEC bus keeps right.
+            boolean hdmiStateBogus = inputsCecStateOnly || (hdmiPorts > 1 && hdmiConnected == hdmiPorts);
             for (TvInputInfo info : inputs) {
                 if (info.getType() == TvInputInfo.TYPE_TUNER
                         && (info.getServiceInfo().applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0
@@ -3433,7 +3497,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                         if (name == null || name.length() == 0) name = named ? custom : device.loadLabel(this);
                         String deviceLabel = name == null || name.length() == 0 ? label : name + " \u00B7 " + label;
                         final String deviceId = device.getId();
-                        int state = hdmiStateBogus ? -1 : tim.getInputState(deviceId);
+                        int state = hdmiStateBogus && !inputsCecStateOnly ? -1 : tim.getInputState(deviceId);
                         View row = addInputRow(rows, popup, R.drawable.ic_input, deviceLabel, state, () -> openInput(deviceId));
                         if (connectedOnly && InputFold.folds(true, state)) fold(row, folded);
                     }
